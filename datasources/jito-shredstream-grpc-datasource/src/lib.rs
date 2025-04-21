@@ -1,4 +1,4 @@
-use {
+use ::{
     async_trait::async_trait,
     carbon_core::{
         datasource::{Datasource, TransactionUpdate, Update, UpdateType},
@@ -12,21 +12,37 @@ use {
     scc::HashCache,
     solana_client::rpc_client::SerializableTransaction,
     solana_entry::entry::Entry,
+    solana_sdk::{message::v0::LoadedAddresses, pubkey::Pubkey},
     solana_transaction_status::TransactionStatusMeta,
     std::{
+        collections::HashMap,
         sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     },
-    tokio::sync::mpsc::Sender,
+    tokio::sync::{mpsc::Sender, RwLock},
     tokio_util::sync::CancellationToken,
 };
 
+const VOTE_ID: Pubkey = solana_sdk::pubkey!("Vote111111111111111111111111111111111111111");
+
 #[derive(Debug)]
-pub struct JitoShredstreamGrpcClient(String);
+pub struct JitoShredstreamGrpcClient {
+    pub endpoint: String,
+    pub local_address_table_loopups: Arc<RwLock<HashMap<Pubkey, [Pubkey; 255]>>>,
+    pub include_vote: bool,
+}
 
 impl JitoShredstreamGrpcClient {
-    pub fn new(endpoint: String) -> Self {
-        JitoShredstreamGrpcClient(endpoint)
+    pub fn new(
+        endpoint: String,
+        local_address_table_loopups: Arc<RwLock<HashMap<Pubkey, [Pubkey; 255]>>>,
+        include_vote: bool,
+    ) -> Self {
+        JitoShredstreamGrpcClient {
+            endpoint,
+            local_address_table_loopups,
+            include_vote,
+        }
     }
 }
 
@@ -39,12 +55,13 @@ impl Datasource for JitoShredstreamGrpcClient {
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
         let sender = sender.clone();
-        let endpoint = self.0.clone();
 
-        let mut client = ShredstreamProxyClient::connect(endpoint)
+        let mut client = ShredstreamProxyClient::connect(self.endpoint.clone())
             .await
             .map_err(|err| carbon_core::error::Error::FailedToConsumeDatasource(err.to_string()))?;
 
+        let include_vote = self.include_vote;
+        let local_address_table_loopups = self.local_address_table_loopups.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -87,6 +104,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                 .try_for_each_concurrent(None, |message| {
                     let metrics = metrics.clone();
                     let sender = sender.clone();
+                    let local_atls = local_address_table_loopups.clone();
                     let dedup_cache = dedup_cache.clone();
 
                     async move {
@@ -105,7 +123,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                         let total_entries = entries.len();
                         let mut duplicate_entries = 0;
 
-                        for entry in entries {
+                        'next_entry: for entry in entries {
                             if dedup_cache.contains(&entry.hash) {
                                 duplicate_entries += 1;
                                 continue;
@@ -113,22 +131,62 @@ impl Datasource for JitoShredstreamGrpcClient {
                             let _ = dedup_cache.put(entry.hash, ());
 
                             for transaction in entry.transactions {
-                                let signature = *transaction.get_signature();
+                                let accounts = transaction.message.static_account_keys();
+                                let is_vote = accounts.len() == 3 && accounts[2].eq(&VOTE_ID);
+                                if !include_vote && is_vote {
+                                    // Skip vote transaction.
+                                    // Voting transactions are not sent along with normal transactions.
+                                    // NOTE: These conclusions are based on limited testing.
+                                    continue 'next_entry;
+                                }
 
-                                let update = Update::Transaction(Box::new(TransactionUpdate {
-                                    signature,
-                                    is_vote: false,
-                                    transaction,
-                                    meta: TransactionStatusMeta {
-                                        status: Ok(()),
-                                        ..Default::default()
-                                    },
-                                    slot: message.slot,
-                                    block_time,
-                                }));
+                                let signature = *transaction.get_signature();
+                                let mut loaded_addresses = LoadedAddresses::default();
+                                if let Some(tables) = transaction.message.address_table_lookups() {
+                                    for table in tables.iter() {
+                                        let keys = local_atls
+                                            .read().await
+                                            .get(&table.account_key)
+                                            .cloned();
+
+                                        if let Some(keys) = keys {
+                                            let writable: Vec<_> = table.writable_indexes
+                                                .iter()
+                                                .filter_map(|&i| keys.get(i as usize))
+                                                .collect();
+                                            let readonly: Vec<_> = table.readonly_indexes
+                                                .iter()
+                                                .filter_map(|&i| keys.get(i as usize))
+                                                .collect();
+
+                                            loaded_addresses.writable.extend(writable);
+                                            loaded_addresses.readonly.extend(readonly);
+                                        }
+                                    }
+                                }
+
+                                let update = Update::Transaction(
+                                    Box::new(TransactionUpdate {
+                                        signature,
+                                        is_vote,
+                                        transaction,
+                                        meta: TransactionStatusMeta {
+                                            status: Ok(()),
+                                            loaded_addresses,
+                                            ..Default::default()
+                                        },
+                                        slot: message.slot,
+                                        block_time,
+                                    })
+                                );
 
                                 if let Err(e) = sender.try_send(update) {
-                                    log::error!("Failed to send transaction update with signature {:?} at slot {}: {:?}", signature, message.slot, e);
+                                    log::error!(
+                                        "Failed to send transaction update with signature {:?} at slot {}: {:?}",
+                                        signature,
+                                        message.slot,
+                                        e
+                                    );
                                     return Ok(());
                                 }
                             }
@@ -137,9 +195,8 @@ impl Datasource for JitoShredstreamGrpcClient {
                         metrics
                             .record_histogram(
                                 "jito_shredstream_grpc_entry_process_time_nanoseconds",
-                                start_time.elapsed().unwrap().as_nanos() as f64,
-                            )
-                            .await
+                                start_time.elapsed().unwrap().as_nanos() as f64
+                            ).await
                             .unwrap();
 
                         metrics
@@ -164,8 +221,7 @@ impl Datasource for JitoShredstreamGrpcClient {
 
                         Ok(())
                     }
-                })
-                .await
+                }).await
             {
                 log::error!("Grpc stream error: {e:?}");
             }
