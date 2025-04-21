@@ -16,7 +16,10 @@ use ::{
     solana_transaction_status::TransactionStatusMeta,
     std::{
         collections::HashMap,
-        sync::Arc,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
         time::{SystemTime, UNIX_EPOCH},
     },
     tokio::sync::{mpsc::Sender, RwLock},
@@ -24,26 +27,39 @@ use ::{
 };
 
 const VOTE_ID: Pubkey = solana_sdk::pubkey!("Vote111111111111111111111111111111111111111");
+type LocalAddresseTables = Arc<RwLock<HashMap<Pubkey, [Pubkey; 255]>>>;
 
 #[derive(Debug)]
 pub struct JitoShredstreamGrpcClient {
-    pub endpoint: String,
-    pub local_address_table_loopups: Arc<RwLock<HashMap<Pubkey, [Pubkey; 255]>>>,
-    pub include_vote: bool,
+    endpoint: String,
+    local_address_table_loopups: Option<LocalAddresseTables>,
+    include_vote: bool,
+    // stream_counter: Arc<AtomicU64>,
 }
 
 impl JitoShredstreamGrpcClient {
-    pub fn new(
-        endpoint: String,
-        local_address_table_loopups: Arc<RwLock<HashMap<Pubkey, [Pubkey; 255]>>>,
-        include_vote: bool,
-    ) -> Self {
+    pub fn new(endpoint: String) -> Self {
         JitoShredstreamGrpcClient {
             endpoint,
-            local_address_table_loopups,
-            include_vote,
+            local_address_table_loopups: None,
+            include_vote: false,
+            // stream_counter: Arc::default(),
         }
     }
+
+    pub fn with_local_alts(mut self, alts: LocalAddresseTables) -> Self {
+        self.local_address_table_loopups = Some(alts);
+        self
+    }
+
+    pub fn with_vote(mut self) -> Self {
+        self.include_vote = true;
+        self
+    }
+
+    // pub fn get_stream_counter(&self) -> Arc<AtomicU64> {
+    //     self.stream_counter.clone()
+    // }
 }
 
 #[async_trait]
@@ -62,6 +78,7 @@ impl Datasource for JitoShredstreamGrpcClient {
 
         let include_vote = self.include_vote;
         let local_address_table_loopups = self.local_address_table_loopups.clone();
+        // let stream_counter = self.stream_counter.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -142,7 +159,13 @@ impl Datasource for JitoShredstreamGrpcClient {
 
                                 let signature = *transaction.get_signature();
                                 let mut loaded_addresses = LoadedAddresses::default();
-                                if let Some(tables) = transaction.message.address_table_lookups() {
+
+                                if
+                                    let (Some(local_atls), Some(tables)) = (
+                                        &local_atls,
+                                        transaction.message.address_table_lookups(),
+                                    )
+                                {
                                     for table in tables.iter() {
                                         let keys = local_atls
                                             .read().await
@@ -191,6 +214,10 @@ impl Datasource for JitoShredstreamGrpcClient {
                                 }
                             }
                         }
+                        
+
+                        // Count accumulation, in some use cases, it is necessary to merge specific instructions across the data stream.
+                        // stream_counter.fetch_add(1, Ordering::Relaxed);
 
                         metrics
                             .record_histogram(
