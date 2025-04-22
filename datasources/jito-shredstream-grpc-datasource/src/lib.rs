@@ -16,10 +16,7 @@ use ::{
     solana_transaction_status::TransactionStatusMeta,
     std::{
         collections::HashMap,
-        sync::{
-            atomic::{AtomicU64, Ordering},
-            Arc,
-        },
+        sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     },
     tokio::sync::{mpsc::Sender, RwLock},
@@ -34,7 +31,6 @@ pub struct JitoShredstreamGrpcClient {
     endpoint: String,
     local_address_table_loopups: Option<LocalAddresseTables>,
     include_vote: bool,
-    // stream_counter: Arc<AtomicU64>,
 }
 
 impl JitoShredstreamGrpcClient {
@@ -43,7 +39,6 @@ impl JitoShredstreamGrpcClient {
             endpoint,
             local_address_table_loopups: None,
             include_vote: false,
-            // stream_counter: Arc::default(),
         }
     }
 
@@ -56,10 +51,6 @@ impl JitoShredstreamGrpcClient {
         self.include_vote = true;
         self
     }
-
-    // pub fn get_stream_counter(&self) -> Arc<AtomicU64> {
-    //     self.stream_counter.clone()
-    // }
 }
 
 #[async_trait]
@@ -78,7 +69,6 @@ impl Datasource for JitoShredstreamGrpcClient {
 
         let include_vote = self.include_vote;
         let local_address_table_loopups = self.local_address_table_loopups.clone();
-        // let stream_counter = self.stream_counter.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -117,8 +107,8 @@ impl Datasource for JitoShredstreamGrpcClient {
 
             let dedup_cache = Arc::new(HashCache::with_capacity(1024, 4096));
 
-            if let Err(e) = stream
-                .try_for_each_concurrent(None, |message| {
+            if
+                let Err(e) = stream.try_for_each_concurrent(None, |message| {
                     let metrics = metrics.clone();
                     let sender = sender.clone();
                     let local_atls = local_address_table_loopups.clone();
@@ -126,8 +116,9 @@ impl Datasource for JitoShredstreamGrpcClient {
 
                     async move {
                         let start_time = SystemTime::now();
-                        let block_time =
-                            Some(start_time.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64);
+                        let block_time = Some(
+                            start_time.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+                        );
 
                         let entries: Vec<Entry> = match bincode::deserialize(&message.entries) {
                             Ok(e) => e,
@@ -229,9 +220,8 @@ impl Datasource for JitoShredstreamGrpcClient {
                         metrics
                             .increment_counter(
                                 "jito_shredstream_grpc_entry_updates_received",
-                                total_entries as u64,
-                            )
-                            .await
+                                total_entries as u64
+                            ).await
                             .unwrap_or_else(|value| {
                                 log::error!("Error recording metric: {}", value)
                             });
@@ -239,9 +229,8 @@ impl Datasource for JitoShredstreamGrpcClient {
                         metrics
                             .increment_counter(
                                 "jito_shredstream_grpc_duplicate_entries",
-                                duplicate_entries,
-                            )
-                            .await
+                                duplicate_entries
+                            ).await
                             .unwrap_or_else(|value| {
                                 log::error!("Error recording metric: {}", value)
                             });
