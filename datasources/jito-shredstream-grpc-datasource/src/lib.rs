@@ -23,7 +23,6 @@ use ::{
     tokio_util::sync::CancellationToken,
 };
 
-const VOTE_ID: Pubkey = solana_sdk::pubkey!("Vote111111111111111111111111111111111111111");
 type LocalAddresseTables = Arc<RwLock<HashMap<Pubkey, [Pubkey; 255]>>>;
 
 #[derive(Debug)]
@@ -131,7 +130,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                         let total_entries = entries.len();
                         let mut duplicate_entries = 0;
 
-                        'next_entry: for entry in entries {
+                        for entry in entries {
                             if dedup_cache.contains(&entry.hash) {
                                 duplicate_entries += 1;
                                 continue;
@@ -140,12 +139,9 @@ impl Datasource for JitoShredstreamGrpcClient {
 
                             for transaction in entry.transactions {
                                 let accounts = transaction.message.static_account_keys();
-                                let is_vote = accounts.len() == 3 && accounts[2].eq(&VOTE_ID);
+                                let is_vote = accounts.len() == 3 && solana_sdk::vote::program::check_id(&accounts[2]);
                                 if !include_vote && is_vote {
-                                    // Skip vote transaction.
-                                    // Voting transactions are not sent along with normal transactions.
-                                    // NOTE: These conclusions are based on limited testing.
-                                    continue 'next_entry;
+                                    continue;
                                 }
 
                                 let signature = *transaction.get_signature();
@@ -206,10 +202,6 @@ impl Datasource for JitoShredstreamGrpcClient {
                             }
                         }
                         
-
-                        // Count accumulation, in some use cases, it is necessary to merge specific instructions across the data stream.
-                        // stream_counter.fetch_add(1, Ordering::Relaxed);
-
                         metrics
                             .record_histogram(
                                 "jito_shredstream_grpc_entry_process_time_nanoseconds",
