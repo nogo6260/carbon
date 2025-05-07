@@ -29,6 +29,7 @@
 //!   instructions against the provided schema, only processing the data if it
 //!   conforms to the schema.
 
+use solana_program::hash::Hash;
 use {
     crate::{
         collection::InstructionDecoderCollection,
@@ -70,6 +71,7 @@ pub struct TransactionMetadata {
     pub meta: solana_transaction_status::TransactionStatusMeta,
     pub message: solana_program::message::VersionedMessage,
     pub block_time: Option<i64>,
+    pub block_hash: Option<Hash>,
 }
 
 impl Default for TransactionMetadata {
@@ -83,6 +85,7 @@ impl Default for TransactionMetadata {
                 solana_sdk::message::Message::default(),
             ),
             block_time: None,
+            block_hash: None,
         }
     }
 }
@@ -122,6 +125,7 @@ impl TryFrom<crate::datasource::TransactionUpdate> for TransactionMetadata {
             meta: value.meta.clone(),
             message: value.transaction.message.clone(),
             block_time: value.block_time,
+            block_hash: value.block_hash,
         })
     }
 }
@@ -235,18 +239,23 @@ pub fn parse_instructions<T: InstructionDecoderCollection>(
 ) -> Vec<ParsedInstruction<T>> {
     log::trace!("parse_instructions(nested_ixs: {:?})", nested_ixs);
 
-    nested_ixs
-        .iter()
-        .filter_map(|nested_ix| {
-            let instruction = T::parse_instruction(&nested_ix.instruction)?;
+    let mut parsed_instructions: Vec<ParsedInstruction<T>> = Vec::new();
 
-            Some(ParsedInstruction {
+    for nested_ix in nested_ixs {
+        if let Some(instruction) = T::parse_instruction(&nested_ix.instruction) {
+            parsed_instructions.push(ParsedInstruction {
                 program_id: nested_ix.instruction.program_id,
                 instruction,
                 inner_instructions: parse_instructions(&nested_ix.inner_instructions),
-            })
-        })
-        .collect()
+            });
+        } else {
+            for inner_ix in nested_ix.inner_instructions.iter() {
+                parsed_instructions.extend(parse_instructions(&[inner_ix.clone()]));
+            }
+        }
+    }
+
+    parsed_instructions
 }
 
 /// Defines an asynchronous trait for processing transactions.

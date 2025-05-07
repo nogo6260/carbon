@@ -110,7 +110,7 @@ impl Datasource for HeliusWebsocket {
                 break;
             }
 
-            let mut helius = match Helius::new_with_ws(&self.api_key, self.cluster.clone()).await {
+            let mut helius = match Helius::new(&self.api_key, self.cluster.clone()) {
                 Ok(client) => client,
                 Err(err) => {
                     log::error!("Failed to create Helius client: {}", err);
@@ -583,6 +583,7 @@ impl Datasource for HeliusWebsocket {
                                                 is_vote: config.filter.vote.is_some_and(|is_vote| is_vote),
                                                 slot: tx_event.slot,
                                                 block_time: None,
+                                                block_hash: None,
                                             }));
 
                                             metrics

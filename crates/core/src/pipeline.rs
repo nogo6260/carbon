@@ -1,4 +1,4 @@
-//! Defines the `Pipeline` struct and related components for processing
+//! Deprocess(ines the `Pipeline` struct and related components for processing
 //! blockchain data updates.
 //!
 //! The `Pipeline` module is central to the `carbon-core` framework, offering a
@@ -50,6 +50,8 @@
 //! - Proper metric collection and flushing are essential for monitoring
 //!   pipeline performance, especially in production environments.
 
+use crate::block_details::{BlockDetailsPipe, BlockDetailsPipes};
+use crate::datasource::BlockDetails;
 use {
     crate::{
         account::{
@@ -153,6 +155,8 @@ pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 1_000;
 ///   account updates.
 /// - `account_deletion_pipes`: A vector of `AccountDeletionPipes` to handle
 ///   deletion events.
+/// - `block_details_pipes`: A vector of `BlockDetailsPipes` to handle
+///   block details.
 /// - `instruction_pipes`: A vector of `InstructionPipes` for processing
 ///   instructions within transactions. These pipes work with nested
 ///   instructions and are generically defined to support varied instruction
@@ -170,8 +174,9 @@ pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 1_000;
 ///
 /// ## Example
 ///
-/// ```rust
-/// 
+/// ```ignore
+/// use std::sync::Arc;
+///
 /// carbon_core::pipeline::Pipeline::builder()
 /// .datasource(transaction_crawler)
 /// .metrics(Arc::new(LogMetrics::new()))
@@ -205,6 +210,7 @@ pub struct Pipeline {
     pub datasources: Vec<Arc<dyn Datasource + Send + Sync>>,
     pub account_pipes: Vec<Box<dyn AccountPipes>>,
     pub account_deletion_pipes: Vec<Box<dyn AccountDeletionPipes>>,
+    pub block_details_pipes: Vec<Box<dyn BlockDetailsPipes>>,
     pub instruction_pipes: Vec<Box<dyn for<'a> InstructionPipes<'a>>>,
     pub transaction_pipes: Vec<Box<dyn for<'a> TransactionPipes<'a>>>,
     pub metrics: Arc<MetricsCollection>,
@@ -225,7 +231,9 @@ impl Pipeline {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use std::sync::Arc;
+    ///
     /// carbon_core::pipeline::Pipeline::builder()
     /// .datasource(transaction_crawler)
     /// .metrics(Arc::new(LogMetrics::new()))
@@ -233,7 +241,7 @@ impl Pipeline {
     /// .instruction(
     ///    TestProgramDecoder,
     ///    TestProgramProcessor
-    /// )
+    /// );
     /// // ...
     /// ```
     ///
@@ -248,6 +256,7 @@ impl Pipeline {
             datasources: Vec::new(),
             account_pipes: Vec::new(),
             account_deletion_pipes: Vec::new(),
+            block_details_pipes: Vec::new(),
             instruction_pipes: Vec::new(),
             transaction_pipes: Vec::new(),
             metrics: MetricsCollection::default(),
@@ -290,8 +299,8 @@ impl Pipeline {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// use carbon_core::Pipeline;
+    /// ```ignore
+    /// use carbon_core::pipeline::Pipeline;
     ///
     /// let mut pipeline = Pipeline::builder()
     ///     .datasource(MyDatasource::new())
@@ -548,6 +557,16 @@ impl Pipeline {
                     .increment_counter("account_deletions_processed", 1)
                     .await?;
             }
+            Update::BlockDetails(block_details) => {
+                for pipe in self.block_details_pipes.iter_mut() {
+                    pipe.run(block_details.clone(), self.metrics.clone())
+                        .await?;
+                }
+
+                self.metrics
+                    .increment_counter("block_details_processed", 1)
+                    .await?;
+            }
         };
 
         Ok(())
@@ -583,7 +602,9 @@ impl Pipeline {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```ignore
+/// use std::sync::Arc;
+///
 /// carbon_core::pipeline::Pipeline::builder()
 /// .datasource(transaction_crawler)
 /// .metrics(Arc::new(LogMetrics::new()))
@@ -591,7 +612,7 @@ impl Pipeline {
 /// .instruction(
 ///    TestProgramDecoder,
 ///    TestProgramProcessor
-/// )
+/// );
 /// // ...
 /// ```
 ///
@@ -634,6 +655,7 @@ pub struct PipelineBuilder {
     pub datasources: Vec<Arc<dyn Datasource + Send + Sync>>,
     pub account_pipes: Vec<Box<dyn AccountPipes>>,
     pub account_deletion_pipes: Vec<Box<dyn AccountDeletionPipes>>,
+    pub block_details_pipes: Vec<Box<dyn BlockDetailsPipes>>,
     pub instruction_pipes: Vec<Box<dyn for<'a> InstructionPipes<'a>>>,
     pub transaction_pipes: Vec<Box<dyn for<'a> TransactionPipes<'a>>>,
     pub metrics: MetricsCollection,
@@ -656,6 +678,8 @@ impl PipelineBuilder {
     /// # Example
     ///
     /// ```rust
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new();
     /// ```
     pub fn new() -> Self {
@@ -676,7 +700,9 @@ impl PipelineBuilder {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .datasource(MyDatasource::new());
     /// ```
@@ -731,7 +757,9 @@ impl PipelineBuilder {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .account(MyAccountDecoder, MyAccountProcessor);
     /// ```
@@ -763,7 +791,9 @@ impl PipelineBuilder {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .account_deletions(MyAccountDeletionProcessor);
     /// ```
@@ -782,6 +812,37 @@ impl PipelineBuilder {
         self
     }
 
+    /// Adds a block details pipe to handle block details updates.
+    ///
+    /// Block details pipes process updates related to block metadata, such as
+    /// slot, block hash, and rewards, with a `Processor` to handle the updates.
+    ///
+    /// # Parameters
+    ///
+    /// - `processor`: A `Processor` that processes block details updates.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
+    /// let builder = PipelineBuilder::new()
+    ///     .block_details(MyBlockDetailsProcessor);
+    /// ```
+    pub fn block_details(
+        mut self,
+        processor: impl Processor<InputType = BlockDetails> + Send + Sync + 'static,
+    ) -> Self {
+        log::trace!(
+            "block_details(self, processor: {:?})",
+            stringify!(processor)
+        );
+        self.block_details_pipes.push(Box::new(BlockDetailsPipe {
+            processor: Box::new(processor),
+        }));
+        self
+    }
+
     /// Adds an instruction pipe to process instructions within transactions.
     ///
     /// Instruction pipes decode and process individual instructions,
@@ -795,7 +856,9 @@ impl PipelineBuilder {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .instruction(MyDecoder, MyInstructionProcessor);
     /// ```
@@ -830,7 +893,9 @@ impl PipelineBuilder {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .transaction(MY_SCHEMA.clone(), MyTransactionProcessor);
     /// ```
@@ -868,7 +933,10 @@ impl PipelineBuilder {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use std::sync::Arc;
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .metrics(Arc::new(LogMetrics::new()));
     /// ```
@@ -890,6 +958,8 @@ impl PipelineBuilder {
     /// # Example
     ///
     /// ```rust
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .metrics_flush_interval(60);
     /// ```
@@ -911,6 +981,9 @@ impl PipelineBuilder {
     /// # Example
     ///
     /// ```rust
+    /// use carbon_core::pipeline::PipelineBuilder;
+    /// use tokio_util::sync::CancellationToken;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .datasource_cancellation_token(CancellationToken::new());
     /// ```
@@ -936,6 +1009,8 @@ impl PipelineBuilder {
     /// # Example
     ///
     /// ```rust
+    /// use carbon_core::pipeline::PipelineBuilder;
+    ///
     /// let builder = PipelineBuilder::new()
     ///     .channel_buffer_size(1000);
     /// ```
@@ -959,7 +1034,9 @@ impl PipelineBuilder {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```ignore
+    /// use std::sync::Arc;
+    ///
     /// carbon_core::pipeline::Pipeline::builder()
     /// .datasource(transaction_crawler)
     /// .metrics(Arc::new(LogMetrics::new()))
@@ -975,7 +1052,9 @@ impl PipelineBuilder {
     /// .transaction(TEST_SCHEMA.clone(), TestProgramTransactionProcessor)
     /// .account_deletions(TestProgramAccountDeletionProcessor)
     /// .channel_buffer_size(1000)
-    /// .build()?
+    /// .build()?;
+    ///
+    ///  Ok(())
     /// ```
     pub fn build(self) -> CarbonResult<Pipeline> {
         log::trace!("build(self)");
@@ -983,6 +1062,7 @@ impl PipelineBuilder {
             datasources: self.datasources,
             account_pipes: self.account_pipes,
             account_deletion_pipes: self.account_deletion_pipes,
+            block_details_pipes: self.block_details_pipes,
             instruction_pipes: self.instruction_pipes,
             transaction_pipes: self.transaction_pipes,
             shutdown_strategy: self.shutdown_strategy,

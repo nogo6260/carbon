@@ -3,6 +3,8 @@
 set -ex
 
 workspace_crates=(
+    carbon-jito-protos
+    
     carbon-macros
     carbon-proc-macros
     carbon-core
@@ -20,6 +22,7 @@ workspace_crates=(
     carbon-prometheus-metrics
 
     carbon-associated-token-account-decoder
+    carbon-boop-decoder
     carbon-drift-v2-decoder
     carbon-fluxbeam-decoder
     carbon-jupiter-dca-decoder
@@ -59,6 +62,7 @@ workspace_crates=(
     carbon-system-program-decoder
     carbon-token-2022-decoder
     carbon-token-program-decoder
+    carbon-virtual-curve-decoder
     carbon-virtuals-decoder
     carbon-zeta-decoder
 )
