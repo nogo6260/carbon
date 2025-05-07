@@ -9,26 +9,34 @@ use ::{
         shredstream_proxy_client::ShredstreamProxyClient, SubscribeEntriesRequest,
     },
     futures::{stream::try_unfold, TryStreamExt},
-    scc::HashCache,
-    solana_client::rpc_client::SerializableTransaction,
-    solana_entry::entry::Entry,
-    solana_sdk::{message::v0::LoadedAddresses, pubkey::Pubkey},
+    scc::{HashCache, HashMap, HashSet},
+    shredstream_lazy_deserialize::VecLazyEntry,
+    solana_sdk::message::legacy::Message as LegacyMessage,
+    solana_sdk::{
+        message::{
+            v0::{LoadedAddresses, Message},
+            VersionedMessage,
+        },
+        pubkey::Pubkey,
+        transaction::VersionedTransaction,
+    },
     solana_transaction_status::TransactionStatusMeta,
     std::{
-        collections::HashMap,
         sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     },
-    tokio::sync::{mpsc::Sender, RwLock},
+    tokio::sync::mpsc::Sender,
     tokio_util::sync::CancellationToken,
 };
 
-type LocalAddresseTables = Arc<RwLock<HashMap<Pubkey, [Pubkey; 255]>>>;
+type LocalAddresseTables = Arc<HashMap<Pubkey, [Pubkey; 255]>>;
+type TargetAccounts = Arc<HashSet<Pubkey>>;
 
 #[derive(Debug)]
 pub struct JitoShredstreamGrpcClient {
     endpoint: String,
     local_address_table_loopups: Option<LocalAddresseTables>,
+    target_accounts: Option<TargetAccounts>,
     include_vote: bool,
 }
 
@@ -37,12 +45,18 @@ impl JitoShredstreamGrpcClient {
         JitoShredstreamGrpcClient {
             endpoint,
             local_address_table_loopups: None,
+            target_accounts: None,
             include_vote: false,
         }
     }
 
     pub fn with_local_alts(mut self, alts: LocalAddresseTables) -> Self {
         self.local_address_table_loopups = Some(alts);
+        self
+    }
+
+    pub fn with_target_accounts(mut self, accounts: TargetAccounts) -> Self {
+        self.target_accounts = Some(accounts);
         self
     }
 
@@ -68,6 +82,7 @@ impl Datasource for JitoShredstreamGrpcClient {
 
         let include_vote = self.include_vote;
         let local_address_table_loopups = self.local_address_table_loopups.clone();
+        let target_accounts = self.target_accounts.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -111,6 +126,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                     let metrics = metrics.clone();
                     let sender = sender.clone();
                     let local_atls = local_address_table_loopups.clone();
+                    let target_accounts = target_accounts.clone();
                     let dedup_cache = dedup_cache.clone();
 
                     async move {
@@ -119,7 +135,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                             start_time.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
                         );
 
-                        let entries: Vec<Entry> = match bincode::deserialize(&message.entries) {
+                        let entries = match VecLazyEntry::new(&message.entries) {
                             Ok(e) => e,
                             Err(e) => {
                                 log::error!("Failed to deserialize entries: {:?}", e);
@@ -130,43 +146,54 @@ impl Datasource for JitoShredstreamGrpcClient {
                         let total_entries = entries.len();
                         let mut duplicate_entries = 0;
 
-                        for entry in entries {
-                            if dedup_cache.contains(&entry.hash) {
+                        'next_entry: for entry in entries.iter() {
+                            let Ok(hash) = entry.to_hash() else {
+                              continue;
+                            };
+                            if dedup_cache.contains(&hash) {
                                 duplicate_entries += 1;
                                 continue;
                             }
-                            let _ = dedup_cache.put(entry.hash, ());
+                            let _ = dedup_cache.put(hash, ());
 
-                            for transaction in entry.transactions {
-                                let accounts = transaction.message.static_account_keys();
-                                let is_vote = accounts.len() == 3 && solana_sdk::vote::program::check_id(&accounts[2]);
+                            for transaction in entry.transactions.iter() {
+                                let Ok(account_keys) = transaction.message.static_account_keys() else {
+                                    continue 'next_entry;
+                                };
+
+                                let is_vote = account_keys.len() == 3 && solana_sdk::vote::program::check_id(&account_keys[2]);
                                 if !include_vote && is_vote {
                                     continue;
                                 }
 
-                                let signature = *transaction.get_signature();
+                                let Ok(signature) = transaction.to_signature() else {
+                                    continue 'next_entry;
+                                };
+
+                                let Ok(atls) = transaction.message.address_table_lookups() else {
+                                    continue 'next_entry;
+                                };
+
                                 let mut loaded_addresses = LoadedAddresses::default();
 
                                 if
                                     let (Some(local_atls), Some(tables)) = (
                                         &local_atls,
-                                        transaction.message.address_table_lookups(),
+                                        &atls,
                                     )
                                 {
                                     for table in tables.iter() {
                                         let keys = local_atls
-                                            .read().await
-                                            .get(&table.account_key)
-                                            .cloned();
+                                            .get(&table.account_key);
 
                                         if let Some(keys) = keys {
                                             let writable: Vec<_> = table.writable_indexes
                                                 .iter()
-                                                .filter_map(|&i| keys.get(i as usize))
+                                                .filter_map(|&i| keys.get().get(i as usize))
                                                 .collect();
                                             let readonly: Vec<_> = table.readonly_indexes
                                                 .iter()
-                                                .filter_map(|&i| keys.get(i as usize))
+                                                .filter_map(|&i| keys.get().get(i as usize))
                                                 .collect();
 
                                             loaded_addresses.writable.extend(writable);
@@ -175,11 +202,50 @@ impl Datasource for JitoShredstreamGrpcClient {
                                     }
                                 }
 
+                                if let Some(target_accounts) = &target_accounts {
+                                    if !account_keys.iter().any(|acc| target_accounts.contains(acc)) 
+                                    && !loaded_addresses.writable.iter().any(|acc| target_accounts.contains(acc)) 
+                                    && !loaded_addresses.readonly.iter().any(|acc| target_accounts.contains(acc)) {
+                                        continue 'next_entry;
+                                    }
+                                }
+
+                                let Ok(header) = transaction.message.header() else {
+                                    continue 'next_entry;
+                                };
+
+                                let Ok(recent_blockhash) = transaction.message.recent_blockhash() else {
+                                    continue 'next_entry;
+                                };
+
+                                let Ok(instructions) = transaction.message.instructions() else {
+                                    continue 'next_entry;
+                                };
+
+                                let versioned_message = match atls {
+                                    Some(address_table_lookups) => VersionedMessage::V0(Message {
+                                        header,
+                                        account_keys,
+                                        recent_blockhash,
+                                        instructions,
+                                        address_table_lookups,
+                                    }),
+                                    None => VersionedMessage::Legacy(LegacyMessage {
+                                        header,
+                                        account_keys,
+                                        recent_blockhash,
+                                        instructions,
+                                    }),
+                                };
+
                                 let update = Update::Transaction(
                                     Box::new(TransactionUpdate {
                                         signature,
                                         is_vote,
-                                        transaction,
+                                        transaction: VersionedTransaction {
+                                            signatures: vec![signature],
+                                            message: versioned_message,
+                                        },
                                         meta: TransactionStatusMeta {
                                             status: Ok(()),
                                             loaded_addresses,
