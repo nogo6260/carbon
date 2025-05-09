@@ -11,9 +11,9 @@ use ::{
     futures::{stream::try_unfold, TryStreamExt},
     scc::{HashCache, HashMap, HashSet},
     shredstream_lazy_deserialize::VecLazyEntry,
-    solana_sdk::message::legacy::Message as LegacyMessage,
     solana_sdk::{
         message::{
+            legacy::Message as LegacyMessage,
             v0::{LoadedAddresses, Message},
             VersionedMessage,
         },
@@ -29,14 +29,16 @@ use ::{
     tokio_util::sync::CancellationToken,
 };
 
-type LocalAddresseTables = Arc<HashMap<Pubkey, [Pubkey; 255]>>;
-type TargetAccounts = Arc<HashSet<Pubkey>>;
+pub type LocalAddresseTables = Arc<HashMap<Pubkey, [Pubkey; 255]>>;
+pub type TargetAccounts = Arc<HashSet<Pubkey>>;
+pub type TargetPrograms = Arc<HashSet<Pubkey>>;
 
 #[derive(Debug)]
 pub struct JitoShredstreamGrpcClient {
     endpoint: String,
     local_address_table_loopups: Option<LocalAddresseTables>,
     target_accounts: Option<TargetAccounts>,
+    target_programs: Option<TargetPrograms>,
     include_vote: bool,
 }
 
@@ -46,6 +48,7 @@ impl JitoShredstreamGrpcClient {
             endpoint,
             local_address_table_loopups: None,
             target_accounts: None,
+            target_programs: None,
             include_vote: false,
         }
     }
@@ -57,6 +60,11 @@ impl JitoShredstreamGrpcClient {
 
     pub fn with_target_accounts(mut self, accounts: TargetAccounts) -> Self {
         self.target_accounts = Some(accounts);
+        self
+    }
+
+    pub fn with_target_programs(mut self, programs: TargetPrograms) -> Self {
+        self.target_programs = Some(programs);
         self
     }
 
@@ -83,6 +91,7 @@ impl Datasource for JitoShredstreamGrpcClient {
         let include_vote = self.include_vote;
         let local_address_table_loopups = self.local_address_table_loopups.clone();
         let target_accounts = self.target_accounts.clone();
+        let target_programs = self.target_programs.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -127,6 +136,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                     let sender = sender.clone();
                     let local_atls = local_address_table_loopups.clone();
                     let target_accounts = target_accounts.clone();
+                    let target_programs = target_programs.clone();
                     let dedup_cache = dedup_cache.clone();
 
                     async move {
@@ -148,7 +158,7 @@ impl Datasource for JitoShredstreamGrpcClient {
 
                         'next_entry: for entry in entries.iter() {
                             let Ok(hash) = entry.to_hash() else {
-                              continue;
+                                continue;
                             };
                             if dedup_cache.contains(&hash) {
                                 duplicate_entries += 1;
@@ -157,11 +167,33 @@ impl Datasource for JitoShredstreamGrpcClient {
                             let _ = dedup_cache.put(hash, ());
 
                             for transaction in entry.transactions.iter() {
-                                let Ok(account_keys) = transaction.message.static_account_keys() else {
+                                let Ok(account_keys) =
+                                    transaction.message.static_account_keys() else {
                                     continue 'next_entry;
                                 };
 
-                                let is_vote = account_keys.len() == 3 && solana_sdk::vote::program::check_id(&account_keys[2]);
+                                let Ok(mut instructions) = transaction.message.instructions() else {
+                                    continue 'next_entry;
+                                };
+
+                                if let Some(programs) = &target_programs {
+                                    instructions = instructions
+                                        .into_iter()
+                                        .filter_map(|ix|
+                                            programs
+                                                .contains(ix.program_id(&account_keys))
+                                                .then_some(ix)
+                                        )
+                                        .collect::<Vec<_>>();
+
+                                    if instructions.is_empty() {
+                                        continue 'next_entry;
+                                    }
+                                }
+
+                                let is_vote =
+                                    account_keys.len() == 3 &&
+                                    solana_sdk::vote::program::check_id(&account_keys[2]);
                                 if !include_vote && is_vote {
                                     continue;
                                 }
@@ -176,15 +208,9 @@ impl Datasource for JitoShredstreamGrpcClient {
 
                                 let mut loaded_addresses = LoadedAddresses::default();
 
-                                if
-                                    let (Some(local_atls), Some(tables)) = (
-                                        &local_atls,
-                                        &atls,
-                                    )
-                                {
+                                if let (Some(local_atls), Some(tables)) = (&local_atls, &atls) {
                                     for table in tables.iter() {
-                                        let keys = local_atls
-                                            .get(&table.account_key);
+                                        let keys = local_atls.get(&table.account_key);
 
                                         if let Some(keys) = keys {
                                             let writable: Vec<_> = table.writable_indexes
@@ -203,9 +229,17 @@ impl Datasource for JitoShredstreamGrpcClient {
                                 }
 
                                 if let Some(target_accounts) = &target_accounts {
-                                    if !account_keys.iter().any(|acc| target_accounts.contains(acc)) 
-                                    && !loaded_addresses.writable.iter().any(|acc| target_accounts.contains(acc)) 
-                                    && !loaded_addresses.readonly.iter().any(|acc| target_accounts.contains(acc)) {
+                                    if
+                                        !account_keys
+                                            .iter()
+                                            .any(|acc| target_accounts.contains(acc)) &&
+                                        !loaded_addresses.writable
+                                            .iter()
+                                            .any(|acc| target_accounts.contains(acc)) &&
+                                        !loaded_addresses.readonly
+                                            .iter()
+                                            .any(|acc| target_accounts.contains(acc))
+                                    {
                                         continue 'next_entry;
                                     }
                                 }
@@ -214,28 +248,27 @@ impl Datasource for JitoShredstreamGrpcClient {
                                     continue 'next_entry;
                                 };
 
-                                let Ok(recent_blockhash) = transaction.message.recent_blockhash() else {
-                                    continue 'next_entry;
-                                };
-
-                                let Ok(instructions) = transaction.message.instructions() else {
+                                let Ok(recent_blockhash) =
+                                    transaction.message.recent_blockhash() else {
                                     continue 'next_entry;
                                 };
 
                                 let versioned_message = match atls {
-                                    Some(address_table_lookups) => VersionedMessage::V0(Message {
-                                        header,
-                                        account_keys,
-                                        recent_blockhash,
-                                        instructions,
-                                        address_table_lookups,
-                                    }),
-                                    None => VersionedMessage::Legacy(LegacyMessage {
-                                        header,
-                                        account_keys,
-                                        recent_blockhash,
-                                        instructions,
-                                    }),
+                                    Some(address_table_lookups) =>
+                                        VersionedMessage::V0(Message {
+                                            header,
+                                            account_keys,
+                                            recent_blockhash,
+                                            instructions,
+                                            address_table_lookups,
+                                        }),
+                                    None =>
+                                        VersionedMessage::Legacy(LegacyMessage {
+                                            header,
+                                            account_keys,
+                                            recent_blockhash,
+                                            instructions,
+                                        }),
                                 };
 
                                 let update = Update::Transaction(
@@ -268,7 +301,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                                 }
                             }
                         }
-                        
+
                         metrics
                             .record_histogram(
                                 "jito_shredstream_grpc_entry_process_time_nanoseconds",
