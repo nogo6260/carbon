@@ -5977,6 +5977,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "shredstream-lazy-deserialize"
 version = "0.1.0"
+source = "git+ssh://github-rust-project/txt5620/shredstream-lazy-deserialize.git#79aea12fbbb11a8337134be50722fb908a41fdb3"
 dependencies = [
  "solana-entry",
  "solana-hash",

@@ -31,4 +31,4 @@ scc = "2.3.4"
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
 
-shredstream-lazy-deserialize = { path = "../../../../shredstream-auth/shredstream-lazy-deserialize" }
+shredstream-lazy-deserialize = { git = "ssh://github-rust-project/txt5620/shredstream-lazy-deserialize.git" }
