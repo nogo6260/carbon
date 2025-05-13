@@ -1,35 +1,33 @@
 use ::{
     async_trait::async_trait,
     carbon_core::{
-        datasource::{Datasource, TransactionUpdate, Update, UpdateType},
+        datasource::{ Datasource, TransactionUpdate, Update, UpdateType },
         error::CarbonResult,
         metrics::MetricsCollection,
     },
     carbon_jito_protos::shredstream::{
-        shredstream_proxy_client::ShredstreamProxyClient, SubscribeEntriesRequest,
+        shredstream_proxy_client::ShredstreamProxyClient,
+        SubscribeEntriesRequest,
     },
-    futures::{stream::try_unfold, TryStreamExt},
-    scc::{HashCache, HashMap, HashSet},
+    futures::{ stream::try_unfold, TryStreamExt },
+    scc::{ HashCache, HashMap, HashSet },
     shredstream_lazy_deserialize::VecLazyEntry,
     solana_sdk::{
         message::{
             legacy::Message as LegacyMessage,
-            v0::{LoadedAddresses, Message},
+            v0::{ LoadedAddresses, Message },
             VersionedMessage,
         },
         pubkey::Pubkey,
         transaction::VersionedTransaction,
     },
     solana_transaction_status::TransactionStatusMeta,
-    std::{
-        sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
-    },
+    std::{ sync::Arc, time::{ SystemTime, UNIX_EPOCH } },
     tokio::sync::mpsc::Sender,
     tokio_util::sync::CancellationToken,
 };
 
-pub type LocalAddresseTables = Arc<HashMap<Pubkey, [Pubkey; 255]>>;
+pub type LocalAddresseTables = Arc<HashMap<Pubkey, Vec<Pubkey>>>;
 pub type TargetAccounts = Arc<HashSet<Pubkey>>;
 pub type TargetPrograms = Arc<HashSet<Pubkey>>;
 
@@ -53,7 +51,7 @@ impl JitoShredstreamGrpcClient {
         }
     }
 
-    pub fn with_local_alts(mut self, alts: LocalAddresseTables) -> Self {
+    pub fn with_local_address_table(mut self, alts: LocalAddresseTables) -> Self {
         self.local_address_table_loopups = Some(alts);
         self
     }
@@ -80,20 +78,21 @@ impl Datasource for JitoShredstreamGrpcClient {
         &self,
         sender: &Sender<Update>,
         cancellation_token: CancellationToken,
-        metrics: Arc<MetricsCollection>,
+        metrics: Arc<MetricsCollection>
     ) -> CarbonResult<()> {
         let sender = sender.clone();
 
-        let mut client = ShredstreamProxyClient::connect(self.endpoint.clone())
-            .await
-            .map_err(|err| carbon_core::error::Error::FailedToConsumeDatasource(err.to_string()))?;
+        let mut client = ShredstreamProxyClient::connect(self.endpoint.clone()).await.map_err(|err|
+            carbon_core::error::Error::FailedToConsumeDatasource(err.to_string())
+        )?;
 
         let include_vote = self.include_vote;
         let local_address_table_loopups = self.local_address_table_loopups.clone();
         let target_accounts = self.target_accounts.clone();
         let target_programs = self.target_programs.clone();
         tokio::spawn(async move {
-            let result = tokio::select! {
+            let result =
+                tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     log::info!("Cancelling Jito Shreadstream gRPC subscription.");
                     return;
@@ -125,7 +124,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                             Err(e) => Err(e),
                         },
                     }
-                },
+                }
             );
 
             let dedup_cache = Arc::new(HashCache::with_capacity(1024, 4096));
