@@ -1,9 +1,11 @@
-use crate::datasource::BlockDetails;
-use crate::error::CarbonResult;
-use crate::metrics::MetricsCollection;
-use crate::processor::Processor;
-use async_trait::async_trait;
-use std::sync::Arc;
+use {
+    crate::{
+        datasource::BlockDetails, error::CarbonResult, metrics::MetricsCollection,
+        processor::Processor,
+    },
+    async_trait::async_trait,
+    std::sync::Arc,
+};
 
 /// A pipe for processing block details using a defined processor.
 ///
@@ -79,8 +81,8 @@ pub struct BlockDetailsPipe {
 ///
 /// - This trait is asynchronous and requires the `async_trait` crate for
 ///   `async` methods.
-/// - Ensure that `BlockDetailsPipe` is configured with a processor capable
-///   of handling block details updates, as this is its primary responsibility
+/// - Ensure that `BlockDetailsPipe` is configured with a processor capable of
+///   handling block details updates, as this is its primary responsibility
 ///   within the pipeline.
 #[async_trait]
 pub trait BlockDetailsPipes: Send + Sync {

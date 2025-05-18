@@ -1,6 +1,4 @@
-use crate::PROGRAM_ID;
-
-use super::OrcaWhirlpoolDecoder;
+use {super::OrcaWhirlpoolDecoder, crate::PROGRAM_ID};
 pub mod close_bundled_position;
 pub mod close_position;
 pub mod collect_fees;

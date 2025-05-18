@@ -13,11 +13,13 @@ categories = ["encoding"]
 crate-type = ["rlib"]
 
 [dependencies]
+carbon-core = { workspace = true }
 solana-client = { workspace = true }
 solana-entry = { workspace = true }
+solana-message = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-transaction = { workspace = true }
 solana-transaction-status = { workspace = true }
-
-carbon-core = { workspace = true }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }

@@ -29,7 +29,6 @@
 //!   instructions against the provided schema, only processing the data if it
 //!   conforms to the schema.
 
-use solana_program::hash::Hash;
 use {
     crate::{
         collection::InstructionDecoderCollection,
@@ -43,6 +42,7 @@ use {
     async_trait::async_trait,
     core::convert::TryFrom,
     serde::de::DeserializeOwned,
+    solana_program::hash::Hash,
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     std::sync::Arc,

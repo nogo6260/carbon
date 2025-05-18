@@ -50,16 +50,15 @@
 //! - Proper metric collection and flushing are essential for monitoring
 //!   pipeline performance, especially in production environments.
 
-use crate::block_details::{BlockDetailsPipe, BlockDetailsPipes};
-use crate::datasource::BlockDetails;
 use {
     crate::{
         account::{
             AccountDecoder, AccountMetadata, AccountPipe, AccountPipes, AccountProcessorInputType,
         },
         account_deletion::{AccountDeletionPipe, AccountDeletionPipes},
+        block_details::{BlockDetailsPipe, BlockDetailsPipes},
         collection::InstructionDecoderCollection,
-        datasource::{AccountDeletion, Datasource, Update},
+        datasource::{AccountDeletion, BlockDetails, Datasource, Update},
         error::CarbonResult,
         instruction::{
             InstructionDecoder, InstructionPipe, InstructionPipes, InstructionProcessorInputType,
@@ -155,8 +154,8 @@ pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 1_000;
 ///   account updates.
 /// - `account_deletion_pipes`: A vector of `AccountDeletionPipes` to handle
 ///   deletion events.
-/// - `block_details_pipes`: A vector of `BlockDetailsPipes` to handle
-///   block details.
+/// - `block_details_pipes`: A vector of `BlockDetailsPipes` to handle block
+///   details.
 /// - `instruction_pipes`: A vector of `InstructionPipes` for processing
 ///   instructions within transactions. These pipes work with nested
 ///   instructions and are generically defined to support varied instruction

@@ -1,31 +1,32 @@
 use ::{
     async_trait::async_trait,
     carbon_core::{
-        datasource::{ Datasource, TransactionUpdate, Update, UpdateType },
+        datasource::{Datasource, TransactionUpdate, Update, UpdateType},
         error::CarbonResult,
         metrics::MetricsCollection,
     },
     carbon_jito_protos::shredstream::{
-        shredstream_proxy_client::ShredstreamProxyClient,
-        SubscribeEntriesRequest,
+        shredstream_proxy_client::ShredstreamProxyClient, SubscribeEntriesRequest,
     },
-    futures::{ stream::try_unfold, TryStreamExt },
-    scc::{ HashCache, HashMap, HashSet },
+    futures::{stream::try_unfold, TryStreamExt},
+    scc::{HashCache, HashMap, HashSet},
     shredstream_lazy_deserialize::VecLazyEntry,
-    solana_sdk::{
-        message::{
-            legacy::Message as LegacyMessage,
-            v0::{ LoadedAddresses, Message },
-            VersionedMessage,
-        },
-        pubkey::Pubkey,
-        transaction::VersionedTransaction,
+    solana_message::{
+        legacy::Message as LegacyMessage,
+        v0::{LoadedAddresses, Message},
+        VersionedMessage,
     },
+    solana_pubkey::Pubkey,
+    solana_transaction::versioned::VersionedTransaction,
     solana_transaction_status::TransactionStatusMeta,
-    std::{ sync::Arc, time::{ SystemTime, UNIX_EPOCH } },
+    std::{
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    },
     tokio::sync::mpsc::Sender,
     tokio_util::sync::CancellationToken,
 };
+const VOTE_ID: Pubkey = solana_pubkey::pubkey!("Vote111111111111111111111111111111111111111");
 
 pub type LocalAddresseTables = Arc<HashMap<Pubkey, Vec<Pubkey>>>;
 pub type TargetAccounts = Arc<HashSet<Pubkey>>;
@@ -78,21 +79,20 @@ impl Datasource for JitoShredstreamGrpcClient {
         &self,
         sender: &Sender<Update>,
         cancellation_token: CancellationToken,
-        metrics: Arc<MetricsCollection>
+        metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
         let sender = sender.clone();
 
-        let mut client = ShredstreamProxyClient::connect(self.endpoint.clone()).await.map_err(|err|
-            carbon_core::error::Error::FailedToConsumeDatasource(err.to_string())
-        )?;
+        let mut client = ShredstreamProxyClient::connect(self.endpoint.clone())
+            .await
+            .map_err(|err| carbon_core::error::Error::FailedToConsumeDatasource(err.to_string()))?;
 
         let include_vote = self.include_vote;
         let local_address_table_loopups = self.local_address_table_loopups.clone();
         let target_accounts = self.target_accounts.clone();
         let target_programs = self.target_programs.clone();
         tokio::spawn(async move {
-            let result =
-                tokio::select! {
+            let result = tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     log::info!("Cancelling Jito Shreadstream gRPC subscription.");
                     return;
@@ -124,7 +124,7 @@ impl Datasource for JitoShredstreamGrpcClient {
                             Err(e) => Err(e),
                         },
                     }
-                }
+                },
             );
 
             let dedup_cache = Arc::new(HashCache::with_capacity(1024, 4096));
@@ -192,7 +192,7 @@ impl Datasource for JitoShredstreamGrpcClient {
 
                                 let is_vote =
                                     account_keys.len() == 3 &&
-                                    solana_sdk::vote::program::check_id(&account_keys[2]);
+                                    VOTE_ID.eq(&account_keys[2]);
                                 if !include_vote && is_vote {
                                     continue;
                                 }

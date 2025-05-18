@@ -1221,6 +1221,9 @@ dependencies = [
  "shredstream-lazy-deserialize",
  "solana-client",
  "solana-entry",
+ "solana-message",
+ "solana-pubkey",
+ "solana-transaction",
  "solana-transaction-status",
  "tokio",
  "tokio-util",
@@ -1564,8 +1567,6 @@ name = "carbon-raydium-clmm-decoder"
 version = "0.8.1"
 dependencies = [
  "carbon-core",
- "carbon-macros",
- "carbon-proc-macros",
  "carbon-test-utils",
  "serde",
  "solana-account",

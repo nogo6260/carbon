@@ -1,6 +1,4 @@
-use crate::PROGRAM_ID;
-
-use super::TokenMetadataDecoder;
+use {super::TokenMetadataDecoder, crate::PROGRAM_ID};
 pub mod _use;
 pub mod approve_collection_authority;
 pub mod approve_use_authority;

@@ -1,6 +1,4 @@
-use crate::PROGRAM_ID;
-
-use super::MeteoraDlmmDecoder;
+use {super::MeteoraDlmmDecoder, crate::PROGRAM_ID};
 pub mod add_liquidity;
 pub mod add_liquidity_by_strategy;
 pub mod add_liquidity_by_strategy2;

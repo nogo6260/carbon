@@ -1,6 +1,4 @@
-use crate::PROGRAM_ID;
-
-use super::PumpfunDecoder;
+use {super::PumpfunDecoder, crate::PROGRAM_ID};
 pub mod buy;
 pub mod complete_event;
 pub mod complete_pump_amm_migration_event;
@@ -81,12 +79,13 @@ impl carbon_core::instruction::InstructionDecoder<'_> for PumpfunDecoder {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{borrow::ToOwned, vec};
-    use carbon_core::{deserialize::ArrangeAccounts, instruction::InstructionDecoder};
-    use solana_instruction::AccountMeta;
-    use solana_pubkey::Pubkey;
-
-    use super::*;
+    use {
+        super::*,
+        alloc::{borrow::ToOwned, vec},
+        carbon_core::{deserialize::ArrangeAccounts, instruction::InstructionDecoder},
+        solana_instruction::AccountMeta,
+        solana_pubkey::Pubkey,
+    };
 
     #[test]
     fn test_decode_buy() {

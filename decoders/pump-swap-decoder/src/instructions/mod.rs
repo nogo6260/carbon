@@ -1,6 +1,4 @@
-use crate::PROGRAM_ID;
-
-use super::PumpSwapDecoder;
+use {super::PumpSwapDecoder, crate::PROGRAM_ID};
 pub mod buy;
 pub mod buy_event;
 pub mod create_config;

@@ -1,6 +1,7 @@
-use super::super::types::*;
-
-use carbon_core::{borsh, CarbonDeserialize};
+use {
+    super::super::types::*,
+    carbon_core::{borsh, CarbonDeserialize},
+};
 
 #[derive(CarbonDeserialize, Debug)]
 #[carbon(discriminator = "0x032b3a6a8384c7ab")]

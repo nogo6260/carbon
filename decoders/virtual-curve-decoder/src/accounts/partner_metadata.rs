@@ -1,5 +1,7 @@
-use alloc::string::String;
-use carbon_core::{borsh, CarbonDeserialize};
+use {
+    alloc::string::String,
+    carbon_core::{borsh, CarbonDeserialize},
+};
 
 #[derive(CarbonDeserialize, Debug, serde::Serialize, serde::Deserialize)]
 #[carbon(discriminator = "0x4444821310d1629c")]

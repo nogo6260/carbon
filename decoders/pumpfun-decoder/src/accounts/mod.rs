@@ -1,9 +1,8 @@
-use carbon_core::account::AccountDecoder;
-use carbon_core::deserialize::CarbonDeserialize;
-
-use crate::PROGRAM_ID;
-
-use super::PumpfunDecoder;
+use {
+    super::PumpfunDecoder,
+    crate::PROGRAM_ID,
+    carbon_core::{account::AccountDecoder, deserialize::CarbonDeserialize},
+};
 pub mod bonding_curve;
 pub mod global;
 pub mod last_withdraw;
@@ -65,9 +64,7 @@ impl AccountDecoder<'_> for PumpfunDecoder {
 
 #[cfg(test)]
 mod tests {
-    use solana_pubkey::Pubkey;
-
-    use super::*;
+    use {super::*, solana_pubkey::Pubkey};
 
     #[test]
     fn test_decode_bonding_curve_account() {
